@@ -8,7 +8,7 @@ import traceback
 from pathlib import Path
 from typing import Optional
 from switch import switch_config
-from ixia import run
+from ixia.run import IxiaRunner, STARTUP_DELAY
 from analysis import data_processor, result_saver
 from logger import get_logger
 
@@ -54,12 +54,15 @@ def main() -> None:
     log.info(f"Valid combinations: {len(valid_params)}")
 
     sw: Optional[switch_config.Switch] = None
+    runner: Optional[IxiaRunner] = None
     completed = 0
     failed = 0
 
     try:
+        # ---- Connect Ixia once ----
         if not skip_switch:
-            sw = switch_config.Switch(switch_host, port=switch_port)
+            runner = IxiaRunner(config_file=ixia_config_file)
+            runner.connect()
 
         for idx, ecn_params in enumerate(valid_params, 1):
             min_th, max_th, mark = ecn_params[0], ecn_params[1], ecn_params[2]
@@ -69,38 +72,95 @@ def main() -> None:
             run_ts = datetime.datetime.now()
 
             try:
-                # Step 1: Configure switch
+                # Step 1: Stop Ixia traffic
+                if runner:
+                    runner.stop()
+
+                # Step 2: Configure switch
                 if not skip_switch:
-                    assert sw is not None
+                    sw = switch_config.Switch(switch_host, port=switch_port)
                     sw.connect()
                     sw.ecn(str(min_th), str(max_th), str(mark))
                     sw.close()
                     log.info("Switch ECN configured")
 
-                # Step 2: Run Ixia test
-                ixia_result = run.run(
-                    config_file=ixia_config_file,
-                    ecn_params=ecn_params,
-                    run_ts=run_ts,
-                    duration_minutes=duration_minutes,
-                    check_interval=check_interval,
-                    port_capacity=port_capacity,
-                    threshold_pct=threshold_pct,
-                )
+                # Step 3: Start Ixia traffic
+                if runner:
+                    runner.start()
 
-                if not ixia_result.get("success"):
-                    log.error(f"Ixia failed: {ixia_result.get('error', 'Unknown')}")
+                # Step 4: Monitor rates
+                total_duration = duration_minutes * 60
+                rate_samples = []
+                stopped_early = False
+                stop_reason = None
+                trigger_rates = None
+                check_enabled = False
+                t_start = time.time()
+
+                while True:
+                    t_elapsed = time.time() - t_start
+
+                    if not check_enabled and t_elapsed >= STARTUP_DELAY:
+                        check_enabled = True
+                        log.info(f"Check enabled after {STARTUP_DELAY}s startup")
+
+                    if runner:
+                        runner.ensure_stats_ready()
+                        rates = runner.get_rates()
+                    else:
+                        rates = []
+
+                    if len(rates) >= 2:
+                        s1, s2 = rates[0], rates[1]
+                        pct1 = s1 / port_capacity * 100 if port_capacity else 0
+                        pct2 = s2 / port_capacity * 100 if port_capacity else 0
+                        diff = abs(pct1 - pct2)
+                        rate_samples.append([t_elapsed, s1, pct1, s2, pct2, diff])
+
+                        if check_enabled and diff > threshold_pct:
+                            stopped_early = True
+                            stop_reason = (f"Diff {diff:.2f}% > {threshold_pct}% "
+                                           f"(flow0={s1:.2f}Gbps {pct1:.2f}%, "
+                                           f"flow1={s2:.2f}Gbps {pct2:.2f}%)")
+                            trigger_rates = {
+                                "time_s": t_elapsed,
+                                "flow0_rate": s1, "flow0_pct": pct1,
+                                "flow1_rate": s2, "flow1_pct": pct2, "diff": diff,
+                            }
+                            log.warning(f"[!] {stop_reason}")
+                            break
+
+                    if check_enabled and t_elapsed >= total_duration:
+                        log.info(f"Duration reached: {t_elapsed:.0f}s")
+                        break
+
+                    time.sleep(check_interval)
+                    if t_elapsed >= 60 and int(t_elapsed) % 60 < check_interval:
+                        log.info(f"Heartbeat {t_elapsed:.0f}s, {len(rate_samples)} samples")
+
+                actual_duration = time.time() - t_start
+
+                # Step 5: Process & save
+                ixia_result = {
+                    "success": len(rate_samples) > 0,
+                    "stopped_early": stopped_early,
+                    "stop_reason": stop_reason,
+                    "duration_s": actual_duration,
+                    "rate_samples": rate_samples,
+                    "trigger_rates": trigger_rates,
+                    "port_capacity": port_capacity,
+                }
+
+                if not ixia_result["success"]:
+                    log.error("No rate samples collected")
                     failed += 1
                     continue
 
-                # Step 3: Process data
                 stats = data_processor.run(ixia_result)
-
-                # Step 4: Save results
                 result_saver.save(stats, ecn_params=ecn_params, run_ts=run_ts)
 
                 completed += 1
-                status = "EARLY_STOP" if stats.get("stopped_early") else "PASS"
+                status = "EARLY_STOP" if stopped_early else "PASS"
                 time.sleep(5)
                 log.info(f"Test {idx} {status} (diff={stats.get('max_diff', 0):.2f}%)")
 
@@ -119,8 +179,20 @@ def main() -> None:
                  f"{skipped} skipped")
 
     finally:
+        if runner:
+            try:
+                runner.stop()
+            except Exception:
+                pass
+            try:
+                runner.disconnect()
+            except Exception:
+                pass
         if sw:
-            sw.close()
+            try:
+                sw.close()
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":

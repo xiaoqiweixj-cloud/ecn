@@ -16,6 +16,70 @@ STARTUP_DELAY = 10
 log = get_logger("ixia")
 
 
+class IxiaRunner:
+    """Connect once, then start/stop traffic per ECN iteration."""
+
+    def __init__(self, config_file: str = "ecn.ixncfg"):
+        self._m2n: IxiaSession | None = None
+        self._config_file = config_file
+        self._flow_view_id = None
+        self._rate_col_index = None
+        self._rate_col_name = None
+
+    # ---- lifecycle ----
+
+    def connect(self):
+        self._m2n = IxiaSession()
+        self._m2n.connect()
+        self._m2n.load_config(self._config_file)
+        _stop_all_protocols(self._m2n.ixnetwork)
+        time.sleep(PROTOCOL_START_DELAY)
+        if not _start_all_protocols(self._m2n.ixnetwork):
+            raise RuntimeError("Failed to start protocols")
+        time.sleep(PROTOCOL_START_DELAY)
+        if not _setup_rocev2_flow_groups(self._m2n.ixnetwork):
+            raise RuntimeError("Failed to setup RoCEv2 flow groups")
+        if not _apply_traffic(self._m2n.ixnetwork):
+            raise RuntimeError("Failed to apply traffic")
+        log.info("Ixia ready")
+
+    def disconnect(self):
+        if self._m2n:
+            self._m2n.disconnect()
+            time.sleep(3)
+
+    # ---- per-iteration ----
+
+    def start(self):
+        if not _start_traffic(self._m2n.ixnetwork):
+            raise RuntimeError("Failed to start traffic")
+
+    def stop(self):
+        _stop_traffic(self._m2n.ixnetwork)
+
+    def ensure_stats_ready(self):
+        """Resolve stats view after traffic is flowing (called once)."""
+        if self._flow_view_id is not None:
+            return
+        self._flow_view_id = _get_flow_stats_view_id(self._m2n)
+        if self._flow_view_id is None:
+            raise RuntimeError("No Flow Statistics view")
+        self._rate_col_index, self._rate_col_name = \
+            _find_rate_tx_column(self._m2n, self._flow_view_id)
+        if self._rate_col_index is None:
+            raise RuntimeError("No Rate Tx column")
+        log.info(f"Monitoring: '{self._rate_col_name}' (col {self._rate_col_index})")
+
+    # ---- monitoring ----
+
+    def get_rates(self):
+        return _get_flow_rates(self._m2n, self._flow_view_id, self._rate_col_index)
+
+    @property
+    def m2n(self):
+        return self._m2n
+
+
 def _stop_all_protocols(ixnetwork):
     try:
         ixnetwork.StopAllProtocols()
