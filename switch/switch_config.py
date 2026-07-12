@@ -106,17 +106,33 @@ class TelnetSocket:
             pass
         # Prevent GC hangs on Windows: both BaseEventLoop.__del__ and
         # IocpProactor.__del__ call close() which blocks on IOCP _poll().
-        # Mark loop closed, and set proactor._iocp=None so its __del__
-        # returns immediately (close() checks `if self._iocp is None: return`).
-        # The IOCP handle is intentionally leaked — closing it would warn
-        # about pending Overlapped operations, and the OS reclaims it on exit.
+        # Mark loop closed, cancel pending ops, drain cancellations,
+        # close the IOCP handle, and set _iocp=None so __del__ skips close().
         try:
             self._loop._closed = True
         except Exception:
             pass
         try:
+            import _overlapped
             proactor = getattr(self._loop, '_proactor', None)
             if proactor is not None:
+                iocp = getattr(proactor, '_iocp', None)
+                if iocp is not None:
+                    try:
+                        _overlapped.CancelIo(iocp)
+                    except Exception:
+                        pass
+                    # Drain cancellation completions (ms=0 returns immediately)
+                    for _ in range(20):
+                        try:
+                            if _overlapped.GetQueuedCompletionStatus(iocp, 0) is None:
+                                break  # timeout — no more completions
+                        except OSError:
+                            break
+                    try:
+                        _overlapped.CloseHandle(iocp)
+                    except Exception:
+                        pass
                 proactor._iocp = None
         except Exception:
             pass
