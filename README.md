@@ -1,60 +1,57 @@
 # ECN2to1
 
-Automated RoCEv2 ECN (WRED) rate-balance test — iterates WRED parameter combinations on a switch, drives IxNetwork traffic, monitors flow rates, and reports pass/fail per segment.
+RoCEv2 ECN（WRED）速率均衡自动化测试 —— 遍历交换机 WRED 参数组合，驱动 IxNetwork 收发 RoCEv2 流量，监控双流速率差异，按段输出结果。
 
-## Architecture
+## 项目结构
 
 ```
-main.py ──► switch/switch_config.py    Telnet-based WRED config on 400G ports
-        ──► ixia/connect.py            IxNetwork REST API session
-        ──► ixia/run.py                Traffic start/stop + RoCEv2 flow stats
-        ──► analysis/data_processor.py Compute summary statistics
-        ──► analysis/result_saver.py   Write summary.txt + per-segment CSVs
+main.py                      测试主入口，遍历 ECN 参数，协调各模块
+switch/switch_config.py      通过 Telnet 在交换机 400G 端口配置 WRED
+ixia/connect.py              IxNetwork REST API 会话管理
+ixia/run.py                  流量启停 + RoCEv2 Flow Statistics 采集
+analysis/data_processor.py   从采样数据计算汇总统计
+analysis/result_saver.py     输出 summary.txt + 分段 CSV
+test_config.json5            测试参数配置（ECN 组合、时长、阈值等）
+ixia_config.json             Ixia 服务器连接凭证
+ecn.ixncfg                   IxNetwork 流量配置文件
+logger.py                    统一日志模块
+scripts/                     调试/工具脚本
 ```
 
-## Requirements
+## 环境要求
 
 - Python ≥ 3.10
-- [ixnetwork-restpy](https://pypi.org/project/ixnetwork-restpy/) — IxNetwork REST API wrapper
-- [telnetlib3](https://pypi.org/project/telnetlib3/) — async Telnet client
-- [json5](https://pypi.org/project/json5/) — config parsing with comments
+- [ixnetwork-restpy](https://pypi.org/project/ixnetwork-restpy/)
+- [telnetlib3](https://pypi.org/project/telnetlib3/)
+- [json5](https://pypi.org/project/json5/)
 
 ```bash
 pip install ixnetwork-restpy telnetlib3 json5
 ```
 
-## Configuration
+## 配置
 
-### `test_config.json5` — Test parameters
+### `test_config.json5`
 
 ```json5
 {
   "ixia": { "config_file": "ecn.ixncfg" },
   "switch": { "host": "10.140.0.142", "port": 10020 },
   "test": {
-    "duration_minutes": 100,
-    "segment_duration_minutes": 10,
-    "check_interval_seconds": 10,
-    "rate_diff_threshold_pct": 10.0,
-    "port_capacity_gbps": 400
+    "duration_minutes": 100,           // 每组 ECN 参数的总测试时长
+    "segment_duration_minutes": 10,    // 每段时长（到点停流再重启）
+    "check_interval_seconds": 10,      // 采样间隔
+    "rate_diff_threshold_pct": 10.0,   // 速率差异阈值（超阈值标记 FAIL）
+    "port_capacity_gbps": 400          // 端口线速，用于百分比换算
   },
   "ecn_params": [
-    [100, 200, 80],
+    [100, 200, 80],    // [min_threshold, max_threshold, mark_probability]
     [100, 300, 80]
   ]
 }
 ```
 
-| Field | Description |
-|-------|-------------|
-| `duration_minutes` | Total test duration per ECN param |
-| `segment_duration_minutes` | Per-segment duration (stop/restart traffic between segments) |
-| `check_interval_seconds` | Sampling interval for rate monitoring |
-| `rate_diff_threshold_pct` | Diff threshold for FAIL marking |
-| `port_capacity_gbps` | Reference line rate for percentage calculation |
-| `ecn_params` | `[min_threshold, max_threshold, mark_probability]` tuples |
-
-### `ixia_config.json` — Ixia server credentials
+### `ixia_config.json`
 
 ```json
 {
@@ -68,38 +65,38 @@ pip install ixnetwork-restpy telnetlib3 json5
 }
 ```
 
-## Usage
+## 使用
 
 ```bash
-# Full run (Ixia + Switch)
+# 完整运行（Ixia + 交换机）
 python main.py
 
-# Ixia-only (skip switch config)
+# 仅 Ixia（跳过交换机配置）
 python main.py --skip-switch
 
-# Utility scripts
-python scripts/check_ixia.py       # Test Ixia API responsiveness
-python scripts/check_sessions.py   # List active Ixia sessions
-python scripts/debug_stats.py      # Inspect raw statistics views
+# 调试脚本
+python scripts/check_ixia.py       # 测试 Ixia API 连通性
+python scripts/check_sessions.py   # 查看当前 Ixia 会话
+python scripts/debug_stats.py      # 查看原始统计数据视图
 ```
 
-## How it works
+## 运行流程
 
-For each ECN parameter combination:
+每组 ECN 参数依次执行：
 
-1. **Stop** Ixia traffic (clean state)
-2. **Configure** switch WRED via Telnet
-3. **Segment loop** — repeat `duration / segment_duration` times:
-   - Start traffic
-   - First segment: wait for stats view to resolve
-   - Monitor flow rates for `segment_duration_minutes`
-   - 5s warmup before threshold judgment
-   - Threshold exceeded → log warning, continue running
-   - Stop traffic, save per-segment CSV
-4. **Analyze** — compute avg rates, per-segment worst diff
-5. **Save** — summary.txt + `segment_N.csv` per param
+1. **停流** — 确保干净初始状态
+2. **配交换机** — Telnet 登录，进入 400G 接口，下发 WRED 命令
+3. **分段循环** — 总时长 ÷ 段时长 = N 段：
+   - 启动流量
+   - 首段：等待统计视图就绪 + 解析 Rate Tx 列索引
+   - 采样监控 `segment_duration_minutes`
+   - 前 5 秒为预热期，不触发阈值告警，不计入段统计
+   - 超阈值 → 记录 warning，继续运行，不退出
+   - 停流，保存本段 CSV
+4. **汇总** — 计算平均速率、每段最差差异
+5. **输出** — 每组参数一个子目录，内含 `summary.txt` + `segment_N.csv`
 
-## Output structure
+## 输出结构
 
 ```
 result/
@@ -115,7 +112,7 @@ result/
       ...
 ```
 
-### summary.txt example
+### summary.txt 示例
 
 ```
 ======================================================================
@@ -130,21 +127,21 @@ result/
   ...
 ```
 
-### segment_N.csv columns
+### segment_N.csv 列说明
 
-| Column | Description |
-|--------|-------------|
-| `time_s` | Seconds from segment start |
-| `flow0_gbps` | Flow 0 rate (Gbps) |
-| `flow0_pct` | Flow 0 rate (% of port capacity) |
-| `flow1_gbps` | Flow 1 rate (Gbps) |
-| `flow1_pct` | Flow 1 rate (%) |
-| `diff_pct` | Absolute diff between flow percentages |
+| 列 | 含义 |
+|----|------|
+| `time_s` | 段内时间（秒） |
+| `flow0_gbps` | 流 0 速率（Gbps） |
+| `flow0_pct` | 流 0 占比（%） |
+| `flow1_gbps` | 流 1 速率（Gbps） |
+| `flow1_pct` | 流 1 占比（%） |
+| `diff_pct` | 双流差异绝对值（%） |
 
-## Design notes
+## 设计要点
 
-- **Ixia connects once** at startup, reused across all ECN iterations and segments
-- **Stats view resolved once** per run (first segment), cached for subsequent segments
-- **5s warmup** — first 5s of each segment excluded from threshold judgment and diff statistics (ramp-up noise)
-- **No early exit** — threshold exceed logs a warning but the test continues to completion
-- **Switch ECN config** uses Telnet; `--skip-switch` flag bypasses it for Ixia-only debugging
+- **Ixia 只连一次**：启动时连接，所有参数、所有段复用同一个会话
+- **统计视图只解析一次**：首段解析 Flow Statistics 视图 ID 和 Rate Tx 列索引，后续段直接使用缓存
+- **5 秒预热**：每段前 5 秒的采样不参与阈值判断和段 diff 统计，避免流量爬坡期的假差异
+- **不提前退出**：超阈值只记 warning，测试跑满总时长
+- **交换机配置**：通过 Telnet 下发 WRED；`--skip-switch` 可跳过交换机仅测 Ixia
