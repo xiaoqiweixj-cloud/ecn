@@ -43,7 +43,7 @@ def _load_config():
         "api_server_ip": "10.140.0.204",
         "rest_port": 443,
         "username": "admin",
-        "password": "Keysightixia202@",
+        "password": "",
         "session_id": None,
         "session_name": "ixia_session",
         "clear_config": True,
@@ -148,8 +148,6 @@ class IxiaSession:
         log.info(f"Loading config: {full_path}")
         assert self.ixnetwork is not None
         self.ixnetwork.LoadConfig(Files(full_path, local_file=True))
-        self._release_and_assign_ports()
-
         self._release_and_assign_ports()
 
     def __enter__(self):

@@ -42,6 +42,7 @@ def run(ixia_result: dict) -> dict:
         "sample_count": len(rate_samples),
         "max_diff": None,
         "is_pass": not stopped_early,
+        "segment_diffs": ixia_result.get("segment_diffs", []),
     }
 
     if trigger_rates:

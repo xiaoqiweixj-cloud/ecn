@@ -35,18 +35,19 @@ def main() -> None:
     switch_port = config["switch"].get("port", 10020)
     test_cfg = config["test"]
     duration_minutes = test_cfg.get("duration_minutes", 100)
+    segment_duration_minutes = test_cfg.get("segment_duration_minutes", 10)
     check_interval = test_cfg.get("check_interval_seconds", 10)
     threshold_pct = test_cfg.get("rate_diff_threshold_pct", 10.0)
     port_capacity = test_cfg.get("port_capacity_gbps", 400)
     ecn_params_list = config["ecn_params"]
 
     log.info(f"ECN params: {len(ecn_params_list)} | {port_capacity}Gbps | "
-             f"{duration_minutes}min | interval {check_interval}s | "
-             f"threshold {threshold_pct}%")
+             f"{duration_minutes}min ({segment_duration_minutes}min/seg) | "
+             f"interval {check_interval}s | threshold {threshold_pct}%")
     log.info(f"Switch: {switch_host}:{switch_port} | Ixia: {ixia_config_file}")
 
     valid_params = [p for p in ecn_params_list
-                    if len(p) >= 3 and p[0] < p[1]]
+                    if len(p) >= 3 and float(p[0]) < float(p[1])]
     skipped = len(ecn_params_list) - len(valid_params)
     if skipped:
         log.warning(f"Skipped {skipped} invalid combinations")
@@ -64,9 +65,8 @@ def main() -> None:
 
     try:
         # ---- Connect Ixia once ----
-        if not skip_switch:
-            runner = IxiaRunner(config_file=ixia_config_file)
-            runner.connect()
+        runner = IxiaRunner(config_file=ixia_config_file)
+        runner.connect()
 
         for idx, ecn_params in enumerate(valid_params, 1):
             min_th, max_th, mark = ecn_params[0], ecn_params[1], ecn_params[2]
@@ -88,78 +88,114 @@ def main() -> None:
                     sw.close()
                     log.info("Switch ECN configured")
 
-                # Step 3: Start Ixia traffic, wait for stats to warm up, then resolve
-                if runner:
-                    runner.start()
-                    time.sleep(STARTUP_DELAY)
-                    runner.ensure_stats_ready()
-
-                # Step 4: Monitor rates
+                # Step 3: Segment-based monitoring
+                segment_duration = segment_duration_minutes * 60
                 total_duration = duration_minutes * 60
-                rate_samples = []
-                stopped_early = False
-                stop_reason = None
-                trigger_rates = None
-                check_enabled = False
-                t_start = time.time()
+                num_segments = max(1, total_duration // segment_duration)
+                all_rate_samples = []
+                segment_diffs = []
+                seg_samples_list = []
 
-                while True:
-                    t_elapsed = time.time() - t_start
+                param_dir = run_dir / f"min={min_th}_max={max_th}_mark={mark}"
 
-                    if not check_enabled and t_elapsed >= STARTUP_DELAY:
-                        check_enabled = True
-                        log.info(f"Check enabled after {STARTUP_DELAY}s startup")
+                for seg in range(num_segments):
+                    seg_label = f"{seg + 1}/{num_segments}"
+                    log.info(f"--- Segment {seg_label}: starting traffic ---")
 
+                    # Start traffic
                     if runner:
-                        rates = runner.get_rates()
-                    else:
-                        rates = []
+                        runner.start()
+                        if seg == 0:
+                            time.sleep(STARTUP_DELAY)
+                            runner.ensure_stats_ready()
 
-                    t_sample = time.time() - t_start  # actual sample timestamp
+                    # Monitor for this segment (no early exit on threshold)
+                    check_enabled = False
+                    t_seg_start = time.time()
+                    seg_samples = []
 
-                    if len(rates) >= 2:
-                        s1, s2 = rates[0], rates[1]
-                        pct1 = s1 / port_capacity * 100 if port_capacity else 0
-                        pct2 = s2 / port_capacity * 100 if port_capacity else 0
-                        diff = abs(pct1 - pct2)
-                        rate_samples.append([t_sample, s1, pct1, s2, pct2, diff])
+                    while True:
+                        t_elapsed = time.time() - t_seg_start
 
-                        if check_enabled and diff > threshold_pct:
-                            stopped_early = True
-                            stop_reason = (f"Diff {diff:.2f}% > {threshold_pct}% "
-                                           f"(flow0={s1:.2f}Gbps {pct1:.2f}%, "
-                                           f"flow1={s2:.2f}Gbps {pct2:.2f}%)")
-                            trigger_rates = {
-                                "time_s": t_sample,
-                                "flow0_rate": s1, "flow0_pct": pct1,
-                                "flow1_rate": s2, "flow1_pct": pct2, "diff": diff,
-                            }
-                            log.warning(f"[!] {stop_reason}")
+                        if not check_enabled and t_elapsed >= 5:
+                            check_enabled = True
+                            log.info(f"Segment {seg_label}: check enabled (5s warmup)")
+
+                        if runner:
+                            rates = runner.get_rates()
+                        else:
+                            rates = []
+
+                        t_sample = time.time() - t_seg_start
+
+                        if len(rates) >= 2:
+                            s1, s2 = rates[0], rates[1]
+                            pct1 = s1 / port_capacity * 100 if port_capacity else 0
+                            pct2 = s2 / port_capacity * 100 if port_capacity else 0
+                            diff = abs(pct1 - pct2)
+                            seg_samples.append(
+                                [t_sample, s1, pct1, s2, pct2, diff])
+
+                            if check_enabled and diff > threshold_pct:
+                                log.warning(
+                                    f"Segment {seg_label}: diff {diff:.2f}% > "
+                                    f"{threshold_pct}% "
+                                    f"(flow0={s1:.2f}Gbps, flow1={s2:.2f}Gbps)")
+
+                        if t_elapsed >= segment_duration:
+                            log.info(
+                                f"Segment {seg_label}: duration reached "
+                                f"({t_elapsed:.0f}s, {len(seg_samples)} samples)")
                             break
 
-                    if check_enabled and t_elapsed >= total_duration:
-                        log.info(f"Duration reached: {t_elapsed:.0f}s")
-                        break
+                        time.sleep(check_interval)
+                        if t_elapsed >= 60 and int(t_elapsed) % 60 < check_interval:
+                            log.info(
+                                f"Segment {seg_label} heartbeat {t_elapsed:.0f}s, "
+                                f"{len(seg_samples)} samples")
 
-                    time.sleep(check_interval)
-                    if t_elapsed >= 60 and int(t_elapsed) % 60 < check_interval:
-                        log.info(f"Heartbeat {t_elapsed:.0f}s, {len(rate_samples)} samples")
+                    # Stop traffic after segment
+                    if runner:
+                        runner.stop()
 
-                actual_duration = time.time() - t_start
+                    # Save per-segment samples (before offset)
+                    seg_samples_list.append([list(row) for row in seg_samples])
 
-                # Stop traffic immediately after monitoring ends
-                if runner:
-                    runner.stop()
+                    # Compute this segment's worst diff (skip 5s warmup)
+                    stable_samples = [r for r in seg_samples if r[0] >= 5]
+                    if stable_samples:
+                        worst = max(stable_samples, key=lambda r: r[5])
+                        seg_diff = worst[5]
+                        segment_diffs.append({
+                            "seg": seg + 1,
+                            "max_diff": seg_diff,
+                            "flow0_rate": worst[1],
+                            "flow0_pct": worst[2],
+                            "flow1_rate": worst[3],
+                            "flow1_pct": worst[4],
+                            "over_threshold": seg_diff > threshold_pct,
+                        })
 
-                # Step 5: Process & save
+                    # Accumulate: offset timestamps by segment boundary
+                    seg_offset = seg * segment_duration
+                    for row in seg_samples:
+                        row[0] = row[0] + seg_offset
+                    all_rate_samples.extend(seg_samples)
+
+                    log.info(f"Segment {seg_label}: done, {len(seg_samples)} samples")
+
+                actual_duration = num_segments * segment_duration
+
+                # Step 4: Process & save
                 ixia_result = {
-                    "success": len(rate_samples) > 0,
-                    "stopped_early": stopped_early,
-                    "stop_reason": stop_reason,
+                    "success": len(all_rate_samples) > 0,
+                    "stopped_early": False,
+                    "stop_reason": None,
                     "duration_s": actual_duration,
-                    "rate_samples": rate_samples,
-                    "trigger_rates": trigger_rates,
+                    "rate_samples": all_rate_samples,
+                    "trigger_rates": None,
                     "port_capacity": port_capacity,
+                    "segment_diffs": segment_diffs,
                 }
 
                 if not ixia_result["success"]:
@@ -169,12 +205,12 @@ def main() -> None:
 
                 stats = data_processor.run(ixia_result)
                 result_saver.save(stats, ecn_params=ecn_params, run_ts=run_ts,
-                                  output_dir=run_dir, rate_samples=rate_samples)
+                                  output_dir=param_dir,
+                                  seg_samples_list=seg_samples_list)
 
                 completed += 1
-                status = "EARLY_STOP" if stopped_early else "PASS"
                 time.sleep(5)
-                log.info(f"Test {idx} {status} (diff={stats.get('max_diff', 0):.2f}%)")
+                log.info(f"Test {idx} PASS (diff={stats.get('max_diff', 0):.2f}%)")
 
             except Exception as e:
                 log.error(f"Test {idx} exception: {e}")

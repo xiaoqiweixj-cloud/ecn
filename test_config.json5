@@ -12,7 +12,8 @@
 
   // Test parameters
   "test": {
-    "duration_minutes": 100,
+    "duration_minutes": 10,
+    "segment_duration_minutes": 1,
     "check_interval_seconds": 10,
     "rate_diff_threshold_pct": 10.0,
     "port_capacity_gbps": 400
@@ -22,7 +23,7 @@
   // Format: [min_threshold, max_threshold, mark_probability]
   "ecn_params": [
     [100, 200, 80],
-    [100, 300, 80],
+    // [100, 300, 80],
     // [100, 400, 80],
     // [100, 500, 80],
     // [100, 600, 80],

@@ -320,6 +320,13 @@ class Switch:
                         log.warning(f"Connection broken, reconnecting...")
                         time.sleep(2)
                         self._ensure_view("cfg")
+                        current = self.get_current_view()
+                        if current not in ("cfg", "dev"):
+                            log.warning(
+                                f"View is '{current}' after ensure_view, "
+                                f"retrying switch_view"
+                            )
+                            self.switch_view("cfg")
                     else:
                         raise
             log.info(f"  {iface} done")
