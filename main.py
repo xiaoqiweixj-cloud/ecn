@@ -88,9 +88,10 @@ def main() -> None:
                     sw.close()
                     log.info("Switch ECN configured")
 
-                # Step 3: Start Ixia traffic + resolve stats once
+                # Step 3: Start Ixia traffic, wait for stats to warm up, then resolve
                 if runner:
                     runner.start()
+                    time.sleep(STARTUP_DELAY)
                     runner.ensure_stats_ready()
 
                 # Step 4: Monitor rates
