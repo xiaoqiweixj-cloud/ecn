@@ -179,6 +179,11 @@ def main() -> None:
                 log.error(f"Test {idx} exception: {e}")
                 log.error(traceback.format_exc())
                 failed += 1
+                if runner:
+                    try:
+                        runner.stop()
+                    except Exception:
+                        pass
                 if sw:
                     try:
                         sw.close()
