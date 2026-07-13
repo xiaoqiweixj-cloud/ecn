@@ -146,6 +146,10 @@ def main() -> None:
 
                 actual_duration = time.time() - t_start
 
+                # Stop traffic immediately after monitoring ends
+                if runner:
+                    runner.stop()
+
                 # Step 5: Process & save
                 ixia_result = {
                     "success": len(rate_samples) > 0,
