@@ -58,6 +58,10 @@ def main() -> None:
     completed = 0
     failed = 0
 
+    # Timestamped output directory for this run
+    run_dir = RESULT_DIR / f"run_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    log.info(f"Output: {run_dir}")
+
     try:
         # ---- Connect Ixia once ----
         if not skip_switch:
@@ -157,7 +161,8 @@ def main() -> None:
                     continue
 
                 stats = data_processor.run(ixia_result)
-                result_saver.save(stats, ecn_params=ecn_params, run_ts=run_ts)
+                result_saver.save(stats, ecn_params=ecn_params, run_ts=run_ts,
+                                  output_dir=run_dir, rate_samples=rate_samples)
 
                 completed += 1
                 status = "EARLY_STOP" if stopped_early else "PASS"

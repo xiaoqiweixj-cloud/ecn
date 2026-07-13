@@ -1,5 +1,6 @@
-"""Save test results to result/result.txt and result/result_pass.txt."""
+"""Save test results to run directory: summary.txt, pass.txt, and per-iteration CSV."""
 
+import csv
 import datetime
 from pathlib import Path
 from typing import Optional, Tuple
@@ -7,24 +8,27 @@ from logger import get_logger
 
 log = get_logger()
 
-PROJECT_DIR = Path(__file__).resolve().parent.parent
-RESULT_DIR = PROJECT_DIR / "result"
-OUTPUT_FILE = RESULT_DIR / "result.txt"
-PASS_FILE = RESULT_DIR / "result_pass.txt"
-
 
 def fmt(v: Optional[float], d: int = 2) -> str:
     return "N/A" if v is None else f"{v:.{d}f}"
 
 
 def save(stats: dict, ecn_params: Optional[list] = None,
-         run_ts: Optional[datetime.datetime] = None) -> Tuple[str, str, bool]:
-    RESULT_DIR.mkdir(parents=True, exist_ok=True)
-    now_str = (run_ts or datetime.datetime.now()).strftime("%Y-%m-%d %H:%M:%S")
+         run_ts: Optional[datetime.datetime] = None,
+         output_dir: Optional[Path] = None,
+         rate_samples: Optional[list] = None) -> Tuple[str, str, bool]:
+    """Save summary text and per-iteration CSV to output_dir.
 
-    if OUTPUT_FILE.exists():
-        with open(OUTPUT_FILE, "a", encoding="utf-8") as f:
-            f.write("\n")
+    If output_dir is None, uses result/<timestamp>/.
+    """
+    if output_dir is None:
+        ts = (run_ts or datetime.datetime.now()).strftime("%Y%m%d_%H%M%S")
+        output_dir = Path(__file__).resolve().parent.parent / "result" / f"run_{ts}"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    summary_file = output_dir / "summary.txt"
+    pass_file = output_dir / "pass.txt"
+    now_str = (run_ts or datetime.datetime.now()).strftime("%Y-%m-%d %H:%M:%S")
 
     ecn_str = (f"min={ecn_params[0]}, max={ecn_params[1]}, mark={ecn_params[2]}"
                if ecn_params else "N/A")
@@ -45,17 +49,32 @@ def save(stats: dict, ecn_params: Optional[list] = None,
         f"  Flow1:          {fmt(stats.get('trigger_flow1_rate', 0))} Gbps "
         f"({fmt(stats.get('trigger_flow1_pct', 0))}%)",
         f"  Diff:           {fmt(stats.get('max_diff'))}%",
+        f"  Samples:        {stats.get('sample_count', 0)}",
         "",
     ]
 
     text = "\n".join(lines) + "\n"
 
-    with open(OUTPUT_FILE, "a", encoding="utf-8") as f:
+    with open(summary_file, "a", encoding="utf-8") as f:
         f.write(text)
-    log.info(text.rstrip())
 
     if not stopped_early:
-        with open(PASS_FILE, "a", encoding="utf-8") as f:
+        with open(pass_file, "a", encoding="utf-8") as f:
             f.write(text)
 
-    return str(OUTPUT_FILE), str(PASS_FILE), not stopped_early
+    # Save per-iteration CSV
+    if rate_samples:
+        ecn_tag = (f"{ecn_params[0]}-{ecn_params[1]}-{ecn_params[2]}_"
+                   if ecn_params else "")
+        ts_tag = (run_ts or datetime.datetime.now()).strftime("%Y%m%d_%H%M%S")
+        csv_file = output_dir / f"rates_{ecn_tag}{ts_tag}.csv"
+        with open(csv_file, "w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow(["time_s", "flow0_gbps", "flow0_pct",
+                             "flow1_gbps", "flow1_pct", "diff_pct"])
+            for row in rate_samples:
+                writer.writerow(row)
+        log.info(f"CSV saved: {csv_file} ({len(rate_samples)} points)")
+
+    log.info(f"Summary: {summary_file}")
+    return str(summary_file), str(pass_file), not stopped_early
