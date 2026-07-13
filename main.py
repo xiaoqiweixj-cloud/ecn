@@ -88,9 +88,10 @@ def main() -> None:
                     sw.close()
                     log.info("Switch ECN configured")
 
-                # Step 3: Start Ixia traffic
+                # Step 3: Start Ixia traffic + resolve stats once
                 if runner:
                     runner.start()
+                    runner.ensure_stats_ready()
 
                 # Step 4: Monitor rates
                 total_duration = duration_minutes * 60
@@ -109,17 +110,18 @@ def main() -> None:
                         log.info(f"Check enabled after {STARTUP_DELAY}s startup")
 
                     if runner:
-                        runner.ensure_stats_ready()
                         rates = runner.get_rates()
                     else:
                         rates = []
+
+                    t_sample = time.time() - t_start  # actual sample timestamp
 
                     if len(rates) >= 2:
                         s1, s2 = rates[0], rates[1]
                         pct1 = s1 / port_capacity * 100 if port_capacity else 0
                         pct2 = s2 / port_capacity * 100 if port_capacity else 0
                         diff = abs(pct1 - pct2)
-                        rate_samples.append([t_elapsed, s1, pct1, s2, pct2, diff])
+                        rate_samples.append([t_sample, s1, pct1, s2, pct2, diff])
 
                         if check_enabled and diff > threshold_pct:
                             stopped_early = True
@@ -127,7 +129,7 @@ def main() -> None:
                                            f"(flow0={s1:.2f}Gbps {pct1:.2f}%, "
                                            f"flow1={s2:.2f}Gbps {pct2:.2f}%)")
                             trigger_rates = {
-                                "time_s": t_elapsed,
+                                "time_s": t_sample,
                                 "flow0_rate": s1, "flow0_pct": pct1,
                                 "flow1_rate": s2, "flow1_pct": pct2, "diff": diff,
                             }
