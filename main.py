@@ -44,18 +44,29 @@ def parse_param_dirname(dirname: str) -> Optional[list]:
     return None
 
 
-def discover_param_dirs(input_dir: Path) -> list:
+def discover_param_dirs(input_dir: Path, ecn_order: list) -> list:
     """Scan input_dir for param subdirectories.
 
     Returns:
-        List of (dir_path, [min, max, mark]) sorted by directory name.
+        List of (dir_path, [min, max, mark]) sorted to match ecn_order.
     """
-    result = []
-    for p in sorted(input_dir.iterdir()):
+    found = {}
+    for p in input_dir.iterdir():
         if p.is_dir():
             params = parse_param_dirname(p.name)
             if params:
-                result.append((p, params))
+                key = (params[0], params[1], params[2])
+                found[key] = (p, params)
+    # Sort by position in ecn_order (config file order)
+    result = []
+    for ecn in ecn_order:
+        if len(ecn) >= 3:
+            key = (str(ecn[0]), str(ecn[1]), str(ecn[2]))
+            if key in found:
+                result.append(found.pop(key))
+    # Append any remaining not in ecn_order (sorted by name)
+    for key in sorted(found):
+        result.append(found[key])
     return result
 
 
@@ -149,7 +160,7 @@ def main() -> None:
 
     # ---- Determine iteration source ----
     if input_dir:
-        param_entries = discover_param_dirs(input_dir)
+        param_entries = discover_param_dirs(input_dir, ecn_params_list)
         if not param_entries:
             log.warning(f"No param subdirectories found in {input_dir}")
         iterable = param_entries
@@ -355,7 +366,7 @@ def main() -> None:
                     failed += 1
                     run_results.append({
                         "min_th": min_th, "max_th": max_th, "mark": mark,
-                        "status": "NO_DATA", "max_diff_pct": None,
+                        "status": "NO_DATA",
                     })
                     continue
 
@@ -379,7 +390,6 @@ def main() -> None:
                 run_results.append({
                     "min_th": min_th, "max_th": max_th, "mark": mark,
                     "seg_pass": seg_pass, "seg_fail": seg_fail,
-                    "max_diff_pct": max_diff,
                 })
 
                 log.info(f"Test {idx} PASS (diff={max_diff if max_diff else 'N/A'})")
@@ -391,7 +401,6 @@ def main() -> None:
                 run_results.append({
                     "min_th": min_th, "max_th": max_th, "mark": mark,
                     "status": f"ERROR: {e}",
-                    "max_diff_pct": None,
                 })
                 if runner:
                     try:
@@ -428,19 +437,18 @@ def main() -> None:
     if run_results:
         run_dir.mkdir(parents=True, exist_ok=True)
         summary_path = run_dir / "run_summary.csv"
+        # Sort by numeric order: min_th, max_th, mark
+        run_results.sort(key=lambda r: (
+            float(r["min_th"]), float(r["max_th"]), float(r["mark"])))
         with open(summary_path, "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
-            writer.writerow(["min_th", "max_th", "mark",
-                             "status", "max_diff_pct"])
+            writer.writerow(["min_th", "max_th", "mark", "status"])
             for r in run_results:
                 status = r.get("status")
                 if status is None:
                     status = f"PASS:{r['seg_pass']} FAIL:{r['seg_fail']}"
-                diff_str = (f"{r['max_diff_pct']:.2f}"
-                            if r.get('max_diff_pct') is not None else "N/A")
                 writer.writerow([
-                    r["min_th"], r["max_th"], r["mark"],
-                    status, diff_str,
+                    r["min_th"], r["max_th"], r["mark"], status,
                 ])
         log.info(f"Run summary: {summary_path}")
 
