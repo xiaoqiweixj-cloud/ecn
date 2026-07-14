@@ -2,20 +2,40 @@
 
 RoCEv2 ECN（WRED）速率均衡自动化测试 —— 遍历交换机 WRED 参数组合，驱动 IxNetwork 收发 RoCEv2 流量，监控双流速率差异，按段输出结果。
 
-## 项目结构
+## 使用
 
+```bash
+# 完整运行（Ixia + 交换机）
+python main.py
+
+# 仅 Ixia（跳过交换机配置）
+python main.py --skip-switch
+
+# 仅配交换机（不启流量）
+python main.py --skip-ixia --skip-save
+
+# 跳过结果保存（只跑流量不出文件）
+python main.py --skip-save
+
+# 用已有数据重算
+python main.py --skip-switch --skip-ixia --input-dir result/run_20260713_113731
 ```
-main.py                      测试主入口，遍历 ECN 参数，协调各模块
-switch/switch_config.py      通过 Telnet 在交换机 400G 端口配置 WRED
-ixia/connect.py              IxNetwork REST API 会话管理
-ixia/run.py                  流量启停 + RoCEv2 Flow Statistics 采集
-analysis/data_processor.py   从采样数据计算汇总统计
-analysis/result_saver.py     输出 summary.txt + 分段 CSV
-test_config.json5            测试参数配置（ECN 组合、时长、阈值等）
-ixia_config.json             Ixia 服务器连接凭证
-ecn.ixncfg                   IxNetwork 流量配置文件
-logger.py                    统一日志模块
-scripts/                     调试/工具脚本
+
+### 运行参数
+
+| 参数 | 作用 |
+|------|------|
+| `--skip-switch` | 跳过交换机 WRED 配置 |
+| `--skip-ixia` | 跳过 Ixia 连接、流量启停和监控采集 |
+| `--skip-save` | 跳过数据处理和结果保存（`summary.txt` + CSV） |
+| `--input-dir <path>` | 指定已有 run 目录，读取 CSV 重算结果（隐含跳过 Ixia） |
+
+### 调试脚本
+
+```bash
+python scripts/check_ixia.py       # 测试 Ixia API 连通性
+python scripts/check_sessions.py   # 查看当前 Ixia 会话
+python scripts/debug_stats.py      # 查看原始统计数据视图
 ```
 
 ## 环境要求
@@ -65,21 +85,6 @@ pip install ixnetwork-restpy telnetlib3 json5
 }
 ```
 
-## 使用
-
-```bash
-# 完整运行（Ixia + 交换机）
-python main.py
-
-# 仅 Ixia（跳过交换机配置）
-python main.py --skip-switch
-
-# 调试脚本
-python scripts/check_ixia.py       # 测试 Ixia API 连通性
-python scripts/check_sessions.py   # 查看当前 Ixia 会话
-python scripts/debug_stats.py      # 查看原始统计数据视图
-```
-
 ## 运行流程
 
 每组 ECN 参数依次执行：
@@ -90,7 +95,7 @@ python scripts/debug_stats.py      # 查看原始统计数据视图
    - 启动流量
    - 首段：等待统计视图就绪 + 解析 Rate Tx 列索引
    - 采样监控 `segment_duration_minutes`
-   - 前 5 秒为预热期，不触发阈值告警，不计入段统计
+   - 前 30 秒为预热期，不触发阈值告警，不计入段统计
    - 超阈值 → 记录 warning，继续运行，不退出
    - 停流，保存本段 CSV
 4. **汇总** — 计算平均速率、每段最差差异
@@ -101,6 +106,7 @@ python scripts/debug_stats.py      # 查看原始统计数据视图
 ```
 result/
   run_20260713_091508/
+    run_summary.csv                # 本轮所有参数汇总
     min=100_max=200_mark=80/
       summary.txt
       segment_1.csv
@@ -112,11 +118,22 @@ result/
       ...
 ```
 
+### run_summary.csv
+
+每轮运行结束后自动生成，记录所有参数组合的结果：
+
+```csv
+min_th,max_th,mark,status,max_diff_pct
+2000,8000,20,PASS:9 FAIL:1,3.93
+2000,8000,80,PASS:8 FAIL:2,6.12
+500,1000,80,PASS:9 FAIL:1,0.06
+```
+
 ### summary.txt 示例
 
 ```
 ======================================================================
-  Test Result - PASS:1 FAIL:9
+  Test Result - PASS:9 FAIL:1
 ======================================================================
   Time:           2026-07-13 09:15:08
   ECN Params:     min=100, max=200, mark=80
@@ -142,6 +159,8 @@ result/
 
 - **Ixia 只连一次**：启动时连接，所有参数、所有段复用同一个会话
 - **统计视图只解析一次**：首段解析 Flow Statistics 视图 ID 和 Rate Tx 列索引，后续段直接使用缓存
-- **5 秒预热**：每段前 5 秒的采样不参与阈值判断和段 diff 统计，避免流量爬坡期的假差异
+- **30 秒预热**：每段前 30 秒的采样不参与阈值判断和段 diff 统计，避免流量爬坡期的假差异
 - **不提前退出**：超阈值只记 warning，测试跑满总时长
 - **交换机配置**：通过 Telnet 下发 WRED；`--skip-switch` 可跳过交换机仅测 Ixia
+- **分段独立启停**：每段到点停流再重启，每段 CSV 独立保存
+- **可重算**：`--input-dir` 读取历史 CSV 重新生成 summary 和 run_summary.csv
