@@ -173,6 +173,13 @@ def main() -> None:
         log.info(f"Valid combinations: {len(valid_params)}")
         iterable = [(None, p) for p in valid_params]
 
+    # ---- Helper to format param label ----
+    def _fmt_param(p):
+        label = f"min={p[0]} max={p[1]} mark={p[2]}"
+        if len(p) >= 5 and p[3] not in (None, "none", "None"):
+            label += f" t1={p[3]} t2={p[4]}"
+        return label
+
     if not iterable:
         log.warning("Nothing to iterate — exiting")
         return
@@ -200,8 +207,11 @@ def main() -> None:
 
         for idx, (param_dir, ecn_params) in enumerate(iterable, 1):
             min_th, max_th, mark = ecn_params[0], ecn_params[1], ecn_params[2]
-            log.info(f"--- Test {idx}/{len(iterable)}: "
-                     f"min={min_th} max={max_th} mark={mark} ---")
+            t1 = ecn_params[3] if len(ecn_params) >= 5 else None
+            t2 = ecn_params[4] if len(ecn_params) >= 5 else None
+            has_fast_ecn = (t1 not in (None, "none", "None")
+                            and t2 not in (None, "none", "None"))
+            log.info(f"--- Test {idx}/{len(iterable)}: {_fmt_param(ecn_params)} ---")
 
             run_ts = datetime.datetime.now()
 
@@ -215,8 +225,10 @@ def main() -> None:
                     sw = switch_config.Switch(switch_host, port=switch_port)
                     sw.connect()
                     sw.ecn(str(min_th), str(max_th), str(mark))
+                    if has_fast_ecn:
+                        sw.fast_ecn(str(t1), str(t2))
                     sw.close()
-                    log.info("Switch ECN configured")
+                    log.info("Switch configured")
 
                 # Step 3: Monitoring
                 if input_dir and param_dir:
@@ -366,13 +378,17 @@ def main() -> None:
                     failed += 1
                     run_results.append({
                         "min_th": min_th, "max_th": max_th, "mark": mark,
+                        "t1": t1 if has_fast_ecn else "",
+                        "t2": t2 if has_fast_ecn else "",
                         "status": "NO_DATA",
                     })
                     continue
 
                 if not skip_save:
-                    param_out_dir = (run_dir
-                                     / f"min={min_th}_max={max_th}_mark={mark}")
+                    dir_name = f"min={min_th}_max={max_th}_mark={mark}"
+                    if has_fast_ecn:
+                        dir_name += f"_t1={t1}_t2={t2}"
+                    param_out_dir = run_dir / dir_name
                     stats = data_processor.run(ixia_result)
                     result_saver.save(stats, ecn_params=ecn_params, run_ts=run_ts,
                                       output_dir=param_out_dir,
@@ -389,6 +405,8 @@ def main() -> None:
                 seg_fail = len(segment_diffs) - seg_pass
                 run_results.append({
                     "min_th": min_th, "max_th": max_th, "mark": mark,
+                    "t1": t1 if has_fast_ecn else "",
+                    "t2": t2 if has_fast_ecn else "",
                     "seg_pass": seg_pass, "seg_fail": seg_fail,
                 })
 
@@ -400,6 +418,8 @@ def main() -> None:
                 failed += 1
                 run_results.append({
                     "min_th": min_th, "max_th": max_th, "mark": mark,
+                    "t1": t1 if has_fast_ecn else "",
+                    "t2": t2 if has_fast_ecn else "",
                     "status": f"ERROR: {e}",
                 })
                 if runner:
@@ -442,13 +462,14 @@ def main() -> None:
             float(r["min_th"]), float(r["max_th"]), float(r["mark"])))
         with open(summary_path, "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
-            writer.writerow(["min_th", "max_th", "mark", "status"])
+            writer.writerow(["min_th", "max_th", "mark", "t1", "t2", "status"])
             for r in run_results:
                 status = r.get("status")
                 if status is None:
                     status = f"PASS:{r['seg_pass']} FAIL:{r['seg_fail']}"
                 writer.writerow([
-                    r["min_th"], r["max_th"], r["mark"], status,
+                    r["min_th"], r["max_th"], r["mark"],
+                    r.get("t1", ""), r.get("t2", ""), status,
                 ])
         log.info(f"Run summary: {summary_path}")
 

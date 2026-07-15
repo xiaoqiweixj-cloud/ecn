@@ -32,6 +32,10 @@ def save(stats: dict, ecn_params: Optional[list] = None,
 
     ecn_str = (f"min={ecn_params[0]}, max={ecn_params[1]}, mark={ecn_params[2]}"
                if ecn_params else "N/A")
+    if ecn_params and len(ecn_params) >= 5:
+        t1, t2 = ecn_params[3], ecn_params[4]
+        if t1 not in (None, "none", "None") and t2 not in (None, "none", "None"):
+            ecn_str += f", t1={t1}, t2={t2}"
 
     stopped_early = stats.get("stopped_early", False)
     segment_diffs = stats.get("segment_diffs", [])
@@ -91,6 +95,10 @@ def save(stats: dict, ecn_params: Optional[list] = None,
     elif rate_samples:
         ecn_tag = (f"{ecn_params[0]}-{ecn_params[1]}-{ecn_params[2]}_"
                    if ecn_params else "")
+        if ecn_params and len(ecn_params) >= 5:
+            t1, t2 = ecn_params[3], ecn_params[4]
+            if t1 not in (None, "none", "None") and t2 not in (None, "none", "None"):
+                ecn_tag = f"{ecn_params[0]}-{ecn_params[1]}-{ecn_params[2]}_t1={t1}-t2={t2}_"
         ts_tag = (run_ts or datetime.datetime.now()).strftime("%Y%m%d_%H%M%S")
         csv_file = output_dir / f"rates_{ecn_tag}{ts_tag}.csv"
         with open(csv_file, "w", newline="", encoding="utf-8") as f:

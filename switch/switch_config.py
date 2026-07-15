@@ -11,6 +11,18 @@ log = get_logger("switch")
 
 ECN_PORT_LIST = ["four-hundredgige0_0", "four-hundredgige0_1", "four-hundredgige0_2"]
 
+FAST_ECN_PORT_LIST = [
+    "178", "17c", "170", "174",
+    "168", "16c", "160", "164",
+    "158", "15c", "150", "154",
+    "148", "14c", "140", "144",
+    "138", "13c", "130", "134",
+    "128", "12c", "120", "124",
+    "118", "11c", "110", "114",
+    "108", "10c", "100", "104",
+    "180", "181",
+]
+
 PROMPT_USER = b"<DPTECH>"
 PROMPT_CONFIG = b"[DPTECH]"
 PROMPT_DEV = b"[DPTECH-Developer]"
@@ -331,6 +343,37 @@ class Switch:
                         raise
             log.info(f"  {iface} done")
         log.info("ECN config complete")
+
+    def fast_ecn(self, t1: str, t2: str):
+        """Configure Fast ECN via CTC shell (port-prio-class)."""
+        self.switch_view("shell")
+        for port in FAST_ECN_PORT_LIST:
+            if str(t1) == "-1":
+                qos_cmd = (
+                    "no qos drop type port-prio-class 0x{} 4 direction egress"
+                    .format(port))
+            else:
+                qos_cmd = (
+                    "qos drop type port-prio-class 0x{} 4 "
+                    "ecn-color-threshold {} {} {} "
+                    "ecn-color-threshold2 {} {} {} "
+                    "direction egress"
+                    .format(port, t1, t1, t1, t2, t2, t2))
+            for retry in range(2):
+                try:
+                    self.send(qos_cmd, PROMPT_SHELL)
+                    break
+                except (ConnectionResetError, BrokenPipeError, EOFError):
+                    if retry < 1:
+                        log.warning("Connection broken, reconnecting...")
+                        time.sleep(2)
+                        self._ensure_view("shell")
+                    else:
+                        raise
+            log.info(f"  fast_ecn port 0x{port} done")
+        # Exit shell back to user view
+        self.switch_view("user")
+        log.info("Fast ECN config complete")
 
     def close(self):
         if self.tn:
