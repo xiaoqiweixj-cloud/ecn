@@ -10,7 +10,7 @@ PROJECT_DIR = Path(__file__).resolve().parent
 LOG_DIR = PROJECT_DIR / "logs"
 LOG_DIR.mkdir(exist_ok=True)
 
-# Shared log file for the entire run — created once at import time
+# Shared log file for the entire run -- created once at import time
 _LOG_FILE = LOG_DIR / f"run_{time.strftime('%Y%m%d_%H%M%S')}.log"
 
 

@@ -7,7 +7,7 @@ import time
 import requests
 import urllib3
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 from ixnetwork_restpy import SessionAssistant, Files
 from logger import get_logger
 
@@ -76,7 +76,7 @@ class IxiaSession:
     def __init__(self, cfg: Optional[dict] = None):
         self.cfg = {**CONNECT_CFG, **(cfg or {})}
         self._assistant: Optional[SessionAssistant] = None
-        self.ixnetwork = None
+        self.ixnetwork: Any = None
         self.http: Optional[requests.Session] = None
         self.session_url: Optional[str] = None
         self.session_id: Optional[int] = None

@@ -1,7 +1,7 @@
 {
   // Ixia configuration
   "ixia": {
-    "config_file": "ecn.ixncfg"
+    "config_file": "ixia\\config\\ecn_port0_4_5_2pp.ixncfg"
   },
 
   // Switch configuration
@@ -27,7 +27,7 @@
     // [1000, 2000, 80, "none", "none"],
     // [1000, 8000, 100, "none", "none"],
     // [4000, 8000, 60, "none", "none"],
-    // [4000, 8000, 80, "none", "none"],
+     [4000, 8000, 80, "none", "none"],
     // [4000, 8000, 80, 1500, 2000],
     // [4000, 8000, 60, 1500, 2000],
     // [200, 400, 100, "none", "none"],

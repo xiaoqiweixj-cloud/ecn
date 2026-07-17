@@ -181,7 +181,7 @@ def main() -> None:
         return label
 
     if not iterable:
-        log.warning("Nothing to iterate — exiting")
+        log.warning("Nothing to iterate -- exiting")
         return
 
     need_ixia = not skip_ixia and not input_dir

@@ -9,6 +9,8 @@ def main():
     m2n = IxiaSession()
     m2n.connect()
     m2n.load_config("ecn.ixncfg")
+    assert m2n.http is not None
+    assert m2n.session_url is not None
 
     ixn = m2n.ixnetwork
 

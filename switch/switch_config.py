@@ -5,6 +5,7 @@ import threading
 import time
 import sys
 import telnetlib3
+from typing import Optional
 from logger import get_logger
 
 log = get_logger("switch")
@@ -138,7 +139,7 @@ class TelnetSocket:
                     for _ in range(20):
                         try:
                             if _overlapped.GetQueuedCompletionStatus(iocp, 0) is None:
-                                break  # timeout — no more completions
+                                break  # timeout -- no more completions
                         except OSError:
                             break
                     try:
@@ -154,7 +155,7 @@ class Switch:
     def __init__(self, host: str, port: int = 10020):
         self.host = host
         self.port = port
-        self.tn = None
+        self.tn: Optional[TelnetSocket] = None
 
     def _connect(self):
         log.info(f"Connecting {self.host}:{self.port}...")
@@ -181,7 +182,7 @@ class Switch:
                     self.tn.close()
                 except Exception:
                     pass
-                self.tn = None
+                self.tn: Optional[TelnetSocket] = None
         except Exception:
             pass
         try:
@@ -191,6 +192,7 @@ class Switch:
             raise
 
     def _read_until(self, prompt: bytes, timeout: int = TIMEOUT) -> bytes:
+        assert self.tn is not None
         try:
             return self.tn.read_until(prompt, timeout)
         except EOFError:
@@ -211,6 +213,7 @@ class Switch:
 
     def send(self, command: str, wait_prompt: bytes = None,
              timeout: int = TIMEOUT) -> bytes:
+        assert self.tn is not None
         self.tn.write(command.encode() + b"\r\n")
         if wait_prompt:
             output = self._read_until(wait_prompt, timeout)
@@ -231,6 +234,7 @@ class Switch:
         self.login()
 
     def login(self):
+        assert self.tn is not None
         log.info("Waiting for prompt...")
         max_retries = 3
         for retry in range(max_retries):
@@ -290,6 +294,7 @@ class Switch:
         return "other"
 
     def switch_view(self, target: str):
+        assert self.tn is not None
         current = self.get_current_view()
         if current == "other":
             self.send("end", PROMPT_USER)
@@ -378,7 +383,7 @@ class Switch:
     def close(self):
         if self.tn:
             self.tn.close()
-            self.tn = None
+            self.tn: Optional[TelnetSocket] = None
             log.info(f"Closed {self.host}:{self.port}")
 
 

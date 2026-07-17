@@ -6,6 +6,7 @@ import traceback
 from pathlib import Path
 from datetime import datetime
 from ixia.connect import IxiaSession
+from typing import Optional
 from logger import get_logger
 
 PROJECT_DIR = Path(__file__).resolve().parent.parent
@@ -20,7 +21,7 @@ class IxiaRunner:
     """Connect once, then start/stop traffic per ECN iteration."""
 
     def __init__(self, config_file: str = "ecn.ixncfg"):
-        self._m2n: IxiaSession | None = None
+        self._m2n: Optional[IxiaSession] = None
         self._config_file = config_file
         self._flow_view_id = None
         self._rate_col_index = None
@@ -51,13 +52,17 @@ class IxiaRunner:
     # ---- per-iteration ----
 
     def start(self):
+        assert self._m2n is not None, "Ixia not connected"
         if not _start_traffic(self._m2n.ixnetwork):
             raise RuntimeError("Failed to start traffic")
 
     def stop(self):
-        _stop_traffic(self._m2n.ixnetwork)
+        if self._m2n:
+            _stop_traffic(self._m2n.ixnetwork)
 
     def ensure_stats_ready(self):
+        """Resolve stats view after traffic is flowing (called once)."""
+        assert self._m2n is not None, "Ixia not connected"
         """Resolve stats view after traffic is flowing (called once)."""
         if self._flow_view_id is not None:
             return
@@ -73,6 +78,7 @@ class IxiaRunner:
     # ---- monitoring ----
 
     def get_rates(self):
+        assert self._m2n is not None, "Ixia not connected"
         return _get_flow_rates(self._m2n, self._flow_view_id, self._rate_col_index)
 
     @property
@@ -244,6 +250,8 @@ def run(config_file=None, ecn_params=None, run_ts=None,
         m2n = IxiaSession()
         m2n.connect()
         m2n.load_config(config_file)
+        assert m2n.http is not None
+        assert m2n.session_url is not None
 
         _stop_all_protocols(m2n.ixnetwork)
         time.sleep(PROTOCOL_START_DELAY)
